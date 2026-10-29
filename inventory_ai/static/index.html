@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Inventory AI</title>
+<style>
+:root{--bg:#f4f6f9;--panel:#fff;--ink:#111827;--ink2:#4b5563;--muted:#6b7280;--line:#e5e7eb;--accent:#2563eb;--accent-wash:#2563eb1a;
+  --good:#047857;--warn:#b45309;--bad:#b91c1c;--sans:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0f16;--panel:#131a24;--ink:#e5e9f0;--ink2:#b4bccb;--muted:#8691a3;--line:#253041;--accent:#5b9bf8;--accent-wash:#5b9bf826;--good:#34d399;--warn:#fbbf24;--bad:#f87171}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans)}
+header{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:5}
+header h1{font-size:16px;margin:0}header .sub{color:var(--muted);font-size:12px}
+nav{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+nav button{border:0;background:none;padding:7px 11px;border-radius:7px;cursor:pointer;color:var(--ink2);font:inherit;font-weight:500}
+nav button.on{background:var(--accent-wash);color:var(--accent)}
+main{max-width:1400px;margin:0 auto;padding:16px}
+section{display:none}section.on{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card .l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.card .v{font:500 22px var(--mono);margin-top:2px}.card .d{font-size:12px;color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px}
+.panel h2{font-size:14px;margin:0 0 10px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+input,select,textarea{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:6px 9px}
+button.b{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:7px;padding:6px 12px;cursor:pointer}
+button.b.p{background:var(--accent);border-color:var(--accent);color:#fff}button.b.ok{color:var(--good)}button.b.no{color:var(--bad)}
+button.b:disabled{opacity:.5;cursor:default}
+.tw{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:500;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}td.n,th.n{text-align:right;font-family:var(--mono);white-space:nowrap}
+td.why{color:var(--ink2);font-size:12px;max-width:520px}
+.pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid currentColor}
+.high{color:var(--bad)}.medium{color:var(--warn)}.low{color:var(--muted)}
+.muted{color:var(--muted)}.err{color:var(--bad)}
+#chatlog{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto;margin-bottom:10px}
+.msg{padding:10px 12px;border-radius:10px;white-space:pre-wrap;max-width:900px}
+.msg.u{background:var(--accent-wash);align-self:flex-end}.msg.a{background:var(--bg);border:1px solid var(--line)}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;display:none}
+@media (max-width:640px){nav{margin-left:0}.card .v{font-size:19px}}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Inventory AI</h1><div class="sub" id="asof">loading…</div></div>
+  <nav id="tabs">
+    <button data-t="overview" class="on">Overview</button><button data-t="approvals">Approvals</button>
+    <button data-t="alerts">Alerts</button><button data-t="items">Item lookup</button>
+    <button data-t="assistant">Assistant</button><button data-t="data">Import &amp; run</button>
+  </nav>
+</header>
+<main>
+<section id="overview" class="on">
+  <div class="grid" id="kpis"></div>
+  <div class="panel"><h2>Running out within 14 days</h2><div class="tw" id="risk"></div></div>
+</section>
+
+<section id="approvals">
+  <div class="panel">
+    <div class="bar">
+      <select id="aKind"><option value="purchase">Purchases</option><option value="transfer">Transfers</option></select>
+      <select id="aStatus"><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="all">All</option></select>
+      <input id="aItem" placeholder="Item code" size="12">
+      <input id="aWh" placeholder="Warehouse" size="18">
+      <button class="b" id="aLoad">Show</button>
+      <span class="muted" id="aCount"></span>
+      <span style="flex:1"></span>
+      <label class="muted">Approver <input id="approver" placeholder="your name" size="14"></label>
+      <button class="b ok" id="aBulkOk">Approve selected</button>
+      <button class="b no" id="aBulkNo">Reject selected</button>
+      <a class="b" id="export" href="/api/approved.xlsx">Download approved (Excel)</a>
+    </div>
+    <div class="tw" id="aTable"></div>
+    <div class="bar" style="margin-top:8px"><button class="b" id="aPrev">Previous</button><button class="b" id="aNext">Next</button></div>
+  </div>
+</section>
+
+<section id="alerts">
+  <div class="panel">
+    <div class="bar">
+      <select id="alKind"><option value="">All kinds</option><option>demand_spike</option><option>demand_drop</option><option>dead_stock</option>
+        <option>unexplained_loss</option><option>negative_stock</option><option>below_cost_sales</option><option>dead_on_order</option></select>
+      <select id="alSev"><option value="">Any severity</option><option>high</option><option>medium</option><option>low</option></select>
+      <button class="b" id="alLoad">Show</button><span class="muted" id="alCount"></span>
+    </div>
+    <div class="tw" id="alTable"></div>
+  </div>
+</section>
+
+<section id="items">
+  <div class="panel">
+    <div class="bar"><input id="iq" placeholder="Part code or description" size="30"><button class="b p" id="iGo">Search</button></div>
+    <div id="iList"></div><div id="iDetail"></div>
+  </div>
+</section>
+
+<section id="assistant">
+  <div class="panel">
+    <h2>Ask about your inventory</h2>
+    <p class="muted" style="margin-top:0">The assistant reads live data and can draft purchases or transfers. Drafts appear under Approvals as pending; nothing is ordered until a person approves it.</p>
+    <div id="chatlog"></div>
+    <div class="bar"><textarea id="q" rows="2" style="flex:1;min-width:240px" placeholder="e.g. Which A-class items will run out in Jeddah this week?"></textarea>
+      <button class="b p" id="ask">Ask</button><button class="b" id="newchat">New chat</button></div>
+  </div>
+</section>
+
+<section id="data">
+  <div class="panel">
+    <h2>1. Import ERP exports</h2>
+    <p class="muted" style="margin-top:0">Sales Detailed, Stock Balance, Item-Wise Purchase History and Stock Entry, as .xlsx or .csv. Any of them, in any order.</p>
+    <div class="bar"><input type="file" id="files" multiple accept=".xlsx,.xls,.csv"><button class="b p" id="upload">Import</button></div>
+    <pre id="impOut" class="muted" style="white-space:pre-wrap"></pre>
+  </div>
+  <div class="panel">
+    <h2>2. Run forecasts, suggestions and alerts</h2>
+    <div class="bar"><button class="b p" id="runBtn">Run now</button></div>
+    <pre id="runOut" class="muted" style="white-space:pre-wrap"></pre>
+  </div>
+</section>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+const fmt = (v, d = 0) => v == null ? "—" : Number(v).toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
+const store = {get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+               set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} }};
+function toast(t) { const el = $("#toast"); el.textContent = t; el.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.display = "none", 3500); }
+async function api(path, opt = {}) {
+  const tok = store.get("token"); opt.headers = Object.assign({}, opt.headers || {}, tok ? {"X-Token": tok} : {});
+  const r = await fetch(path, opt);
+  if (r.status === 401) { const t = prompt("Access token"); if (t) { store.set("token", t); return api(path, opt); } }
+  const body = r.headers.get("content-type")?.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error(body.detail || body || r.statusText);
+  return body;
+}
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) { if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v); }
+  for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : String(k));
+  return e;
+}
+function table(cols, rows) {
+  if (!rows.length) return el("p", {class: "muted"}, "Nothing to show.");
+  return el("table", {}, el("thead", {}, el("tr", {}, cols.map(c => el("th", {class: c.n ? "n" : ""}, c.h)))),
+    el("tbody", {}, rows.map(r => el("tr", {}, cols.map(c => { const v = c.f ? c.f(r) : r[c.k]; return el("td", {class: (c.n ? "n " : "") + (c.cls || "")}, v); })))));
+}
+
+// tabs
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll("main section").forEach(s => s.classList.toggle("on", s.id === b.dataset.t));
+  ({approvals: loadApprovals, alerts: loadAlerts, overview: loadOverview})[b.dataset.t]?.();
+});
+
+// overview
+async function loadOverview() {
+  const s = await api("/api/summary");
+  $("#asof").textContent = s.forecast_run ? `Forecast run ${s.forecast_run} · stock to ${s.last_imports?.stock?.data_to ?? "—"} · sales to ${s.last_imports?.sales?.data_to ?? "—"}` : "No data yet: import files and run (Import & run tab)";
+  const p = s.pending || {}, a = s.alerts || {};
+  const card = (l, v, d) => el("div", {class: "card"}, el("div", {class: "l"}, l), el("div", {class: "v"}, v), el("div", {class: "d"}, d || ""));
+  const nAlerts = Object.values(a).reduce((x, y) => x + y.count, 0);
+  $("#kpis").replaceChildren(
+    card("Sellable stock value", fmt(s.stock_value_sellable), "SAR"),
+    card("Items", fmt(s.items), `${s.warehouses} selling warehouses`),
+    card("Purchases to approve", fmt(p.purchase?.count), fmt(p.purchase?.value) + " SAR"),
+    card("Transfers to approve", fmt(p.transfer?.count), fmt(p.transfer?.value) + " SAR"),
+    card("Branch lines out of stock", fmt(s.branch_lines_out_of_stock), "items that sell, 0 on hand"),
+    card("Open alerts", fmt(nAlerts), Object.entries(a).map(([k, v]) => `${k.replace(/_/g, " ")} ${v.count}`).slice(0, 3).join(" · ")));
+  const risk = await api("/api/stockout-risk?days=14&limit=30");
+  $("#risk").replaceChildren(table([
+    {h: "Item", k: "item_code"}, {h: "Name", k: "name"}, {h: "Warehouse", k: "warehouse"}, {h: "Class", k: "abc"},
+    {h: "Per day", n: 1, f: r => fmt(r.daily_mean, 2)}, {h: "Position", n: 1, f: r => fmt(r.position)}, {h: "Days left", n: 1, f: r => fmt(r.days_of_cover, 1)}], risk));
+}
+
+// approvals
+let aOffset = 0; const PAGE = 50; const selected = new Set();
+$("#approver").value = store.get("approver") || ""; $("#approver").onchange = e => store.set("approver", e.target.value.trim());
+async function loadApprovals() {
+  const q = new URLSearchParams({kind: $("#aKind").value, status: $("#aStatus").value, limit: PAGE, offset: aOffset});
+  if ($("#aItem").value.trim()) q.set("item", $("#aItem").value.trim());
+  if ($("#aWh").value.trim()) q.set("warehouse", $("#aWh").value.trim());
+  const res = await api("/api/suggestions?" + q); selected.clear();
+  $("#aCount").textContent = `${fmt(res.total)} suggestions · ${fmt(res.total_value)} SAR`;
+  const pending = $("#aStatus").value === "pending", transfer = $("#aKind").value === "transfer";
+  const cols = [
+    {h: "", f: r => r.status === "pending" ? el("input", {type: "checkbox", onchange: e => e.target.checked ? selected.add(r.id) : selected.delete(r.id)}) : ""},
+    {h: "#", k: "id"}, {h: "Item", f: r => el("div", {}, el("b", {}, r.item_code), el("div", {class: "muted"}, r.item_name || ""))},
+    transfer ? {h: "From → To", f: r => `${r.from_warehouse} → ${r.to_warehouse}`} : {h: "Supplier", f: r => r.supplier_code || "—"},
+    {h: "Qty", n: 1, f: r => fmt(r.qty)}, {h: "Value SAR", n: 1, f: r => fmt(r.value)},
+    {h: "Why", cls: "why", f: r => el("div", {}, r.reason, r.created_by === "agent" ? el("div", {class: "muted"}, "drafted by assistant") : "")},
+    pending ? {h: "Decide", f: r => el("div", {class: "bar", style: "margin:0;flex-wrap:nowrap"},
+      el("input", {type: "number", min: "1", value: r.qty, style: "width:80px", id: "q" + r.id}),
+      el("button", {class: "b ok", onclick: () => decide(r.id, "approve")}, "Approve"),
+      el("button", {class: "b no", onclick: () => decide(r.id, "reject")}, "Reject"))}
+            : {h: "Decision", f: r => r.decided_by ? `${r.status} by ${r.decided_by}${r.decision_note ? " · " + r.decision_note : ""}` : r.status}];
+  $("#aTable").replaceChildren(table(cols, res.rows));
+  $("#aPrev").disabled = aOffset === 0; $("#aNext").disabled = aOffset + PAGE >= res.total;
+}
+function approverName() { const n = $("#approver").value.trim(); if (n.length < 2) { toast("Enter your name as approver first"); $("#approver").focus(); return null; } store.set("approver", n); return n; }
+async function decide(id, decision) {
+  const who = approverName(); if (!who) return;
+  const note = decision === "reject" ? prompt("Reason for rejecting (optional)") || null : null;
+  const qty = Number($("#q" + id)?.value) || null;
+  try { await api(`/api/suggestions/${id}/decision`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({decision, decided_by: who, note, qty})}); toast(`#${id} ${decision}d`); loadApprovals(); }
+  catch (e) { toast(e.message); }
+}
+async function bulk(decision) {
+  const who = approverName(); if (!who) return; if (!selected.size) return toast("Tick some rows first");
+  if (!confirm(`${decision} ${selected.size} suggestions as ${who}?`)) return;
+  const r = await api("/api/suggestions/bulk-decision", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ids: [...selected], decision, decided_by: who})});
+  toast(`${r.done.length} done${r.failed.length ? `, ${r.failed.length} failed` : ""}`); loadApprovals();
+}
+$("#aLoad").onclick = () => { aOffset = 0; loadApprovals(); }; $("#aKind").onchange = $("#aLoad").onclick; $("#aStatus").onchange = $("#aLoad").onclick;
+$("#aPrev").onclick = () => { aOffset = Math.max(0, aOffset - PAGE); loadApprovals(); }; $("#aNext").onclick = () => { aOffset += PAGE; loadApprovals(); };
+$("#aBulkOk").onclick = () => bulk("approve"); $("#aBulkNo").onclick = () => bulk("reject");
+$("#export").onclick = async e => { e.preventDefault(); const tok = store.get("token");
+  const r = await fetch("/api/approved.xlsx", {headers: tok ? {"X-Token": tok} : {}}); const b = await r.blob();
+  const a = el("a", {href: URL.createObjectURL(b), download: "approved.xlsx"}); document.body.append(a); a.click(); a.remove(); };
+
+// alerts
+async function loadAlerts() {
+  const q = new URLSearchParams({limit: 200}); if ($("#alKind").value) q.set("kind", $("#alKind").value); if ($("#alSev").value) q.set("severity", $("#alSev").value);
+  const res = await api("/api/alerts?" + q); $("#alCount").textContent = `${fmt(res.total)} open`;
+  $("#alTable").replaceChildren(table([
+    {h: "Severity", f: r => el("span", {class: "pill " + r.severity}, r.severity)}, {h: "Kind", f: r => r.kind.replace(/_/g, " ")},
+    {h: "Item", k: "item_code"}, {h: "Warehouse", f: r => r.warehouse || "—"}, {h: "Value", n: 1, f: r => fmt(r.value)},
+    {h: "Details", cls: "why", k: "message"},
+    {h: "", f: r => el("button", {class: "b", onclick: async () => { await api(`/api/alerts/${r.id}/acknowledge`, {method: "POST"}); loadAlerts(); }}, "Done")}], res.rows));
+}
+$("#alLoad").onclick = loadAlerts;
+
+// items
+$("#iGo").onclick = async () => {
+  const res = await api("/api/items/search?q=" + encodeURIComponent($("#iq").value.trim())); $("#iDetail").replaceChildren();
+  $("#iList").replaceChildren(table([{h: "Code", f: r => el("a", {href: "#", onclick: e => { e.preventDefault(); showItem(r.code); }}, r.code)}, {h: "Name", k: "name"}, {h: "Group", k: "item_group"}, {h: "Brand", k: "parent_group"}, {h: "Unit cost", n: 1, f: r => fmt(r.unit_cost, 2)}], res));
+};
+$("#iq").onkeydown = e => { if (e.key === "Enter") $("#iGo").click(); };
+async function showItem(code) {
+  const d = await api("/api/items/" + encodeURIComponent(code)); $("#iList").replaceChildren();
+  $("#iDetail").replaceChildren(
+    el("h2", {}, `${d.item.code} · ${d.item.name || ""}`),
+    el("p", {class: "muted"}, `${d.item.group || ""} · ${d.item.brand || ""} · unit cost ${fmt(d.item.unit_cost, 2)} SAR · supplier ${d.item.supplier || "—"} · company on hand ${fmt(d.company.on_hand)} · demand ${fmt(d.company.daily_demand, 2)}/day · on order ${fmt(d.company.on_order)}`),
+    el("div", {class: "tw"}, table([{h: "Warehouse", k: "warehouse"}, {h: "Type", k: "category"}, {h: "On hand", n: 1, f: r => fmt(r.qty)}, {h: "In transit", n: 1, f: r => fmt(r.inbound)},
+      {h: "Per day", n: 1, f: r => fmt(r.daily_mean, 2)}, {h: "Pattern", f: r => r.pattern || "—"}, {h: "Reorder pt", n: 1, f: r => fmt(r.reorder_point, 1)},
+      {h: "Order up to", n: 1, f: r => fmt(r.order_up_to, 0)}, {h: "Days cover", n: 1, f: r => fmt(r.days_of_cover, 0)}, {h: "Last sale", f: r => r.last_sale || "—"}], d.warehouses)),
+    d.pending_suggestions.length ? el("p", {}, `${d.pending_suggestions.length} pending suggestion(s) for this item, see Approvals.`) : "",
+    d.alerts.length ? el("ul", {}, d.alerts.map(a => el("li", {}, `${a.kind.replace(/_/g, " ")} at ${a.warehouse || "company"}: ${a.message}`))) : "");
+}
+
+// assistant
+let convo = null;
+function addMsg(cls, text) { const m = el("div", {class: "msg " + cls}, text); $("#chatlog").append(m); m.scrollIntoView({block: "end"}); return m; }
+$("#ask").onclick = async () => {
+  const q = $("#q").value.trim(); if (!q) return; $("#q").value = ""; addMsg("u", q); const wait = addMsg("a muted", "Thinking…"); $("#ask").disabled = true;
+  try { const r = await api("/api/agent", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question: q, conversation_id: convo})});
+    convo = r.conversation_id; wait.className = "msg a"; wait.textContent = r.answer + (r.drafted_suggestions.length ? `\n\nDrafted for approval: #${r.drafted_suggestions.join(", #")}` : ""); }
+  catch (e) { wait.className = "msg a err"; wait.textContent = e.message; }
+  $("#ask").disabled = false;
+};
+$("#q").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#ask").click(); } };
+$("#newchat").onclick = () => { convo = null; $("#chatlog").replaceChildren(); };
+
+// import & run
+$("#upload").onclick = async () => {
+  const f = $("#files").files; if (!f.length) return toast("Choose files first");
+  const fd = new FormData(); for (const x of f) fd.append("files", x); $("#impOut").textContent = "Importing…";
+  try { const r = await api("/api/import", {method: "POST", body: fd});
+    $("#impOut").textContent = r.loaded.map(x => `${x.kind}: ${fmt(x.rows)} rows (${x.from} → ${x.to})  ${x.file}\n   ${JSON.stringify(x.report)}`).join("\n") + (r.errors.length ? "\n\nNot imported:\n" + r.errors.map(e => `${e.file}: ${e.error}`).join("\n") : ""); }
+  catch (e) { $("#impOut").textContent = e.message; }
+};
+$("#runBtn").onclick = async () => { $("#runOut").textContent = "Running…"; $("#runBtn").disabled = true;
+  try { $("#runOut").textContent = JSON.stringify(await api("/api/run", {method: "POST"}), null, 2); loadOverview(); } catch (e) { $("#runOut").textContent = e.message; }
+  $("#runBtn").disabled = false; };
+
+loadOverview().catch(e => $("#asof").textContent = e.message);
+</script>
+</body>
+</html>

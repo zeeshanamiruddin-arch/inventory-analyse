@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+.env
+data/
+sample_data/
+exports/
+.pytest_cache/
+*.egg-info/

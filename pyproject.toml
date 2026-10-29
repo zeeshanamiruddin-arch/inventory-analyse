@@ -1,0 +1,32 @@
+[project]
+name = "inventory-ai"
+version = "0.1.0"
+description = "AI-assisted warehouse inventory: ERP Excel import, demand forecasting, replenishment with human approval, anomaly alerts and a Claude agent."
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "openpyxl>=3.1",
+    "sqlalchemy>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "anthropic>=0.70",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["inventory_ai*"]
+
+[tool.setuptools.package-data]
+inventory_ai = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: inventory
+      POSTGRES_DB: inventory
+    command: ["postgres", "-c", "shared_buffers=1GB", "-c", "work_mem=64MB", "-c", "max_wal_size=4GB"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://inventory:inventory@db:5432/inventory
+    ports: ["8000:8000"]
+    volumes: ["./data:/data"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  # Nightly run at 02:00 server time: forecasts, suggestions, alerts.
+  nightly:
+    build: .
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://inventory:inventory@db:5432/inventory
+    entrypoint: ["sh", "-c", "while true; do now=$$(date +%s); next=$$(date -d 'tomorrow 02:00' +%s); sleep $$((next-now)); python -m inventory_ai run; done"]
+    depends_on:
+      db: {condition: service_healthy}
+
+volumes:
+  pgdata:
