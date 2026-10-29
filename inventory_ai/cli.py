@@ -12,6 +12,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from datetime import date
 
 from . import db
@@ -33,9 +34,10 @@ def _import(paths: list[str]) -> int:
     order = {"stock": 0, "purchase": 1, "transfer": 2, "sales": 3}
     parsed.sort(key=lambda pf: (order[pf.kind], pf.date_to or date.min))
     for pf in parsed:
+        t0 = time.time()
         with db.session_scope() as s:
             entry = load(s, pf)
-        print(f"{pf.kind:9s} {entry.rows_loaded:>9,} rows  {pf.date_from} .. {pf.date_to}  {pf.file_name}")
+        print(f"{pf.kind:9s} {entry.rows_loaded:>9,} rows  {pf.date_from} .. {pf.date_to}  {time.time() - t0:6.1f}s  {pf.file_name}")
         print("          " + json.dumps(pf.report, default=str))
     return 1 if failed else 0
 

@@ -131,3 +131,12 @@ def test_spike_driven_suggestions_carry_a_warning(client, sample):
     client.post("/api/run")
     recs = client.get("/api/suggestions", params={"item": "SP-000001", "status": "pending"}).json()["rows"]
     assert recs and all("demand spike" in r["reason"] for r in recs)
+
+
+@pytest.mark.parametrize("config_dir", [None, "/nonexistent"])
+def test_assistant_without_credentials_says_so(client, monkeypatch, tmp_path, config_dir):
+    for v in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", config_dir or str(tmp_path))  # empty dir = no profile at all
+    r = client.post("/api/agent", json={"question": "hello"})
+    assert r.status_code == 503 and "ANTHROPIC_API_KEY" in r.json()["detail"]

@@ -143,9 +143,9 @@ def plan_transfers(g: pd.DataFrame, cfg: Settings, unit_cost: pd.Series) -> pd.D
 
 
 def plan_purchases(g: pd.DataFrame, inp: Inputs, cfg: Settings, unit_cost: pd.Series) -> pd.DataFrame:
-    by = g.groupby("item_code").agg(
+    by = g.assign(var=g["daily_std"] ** 2).groupby("item_code").agg(
         daily_mean=("daily_mean", "sum"),
-        var=("daily_std", lambda s: float((s ** 2).sum())),
+        var=("var", "sum"),
         available=("available", "sum"),
         inbound=("inbound", "sum"),
         abc=("abc", "first"),

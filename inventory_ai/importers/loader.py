@@ -87,32 +87,54 @@ def ensure_warehouses(session: Session, names: Iterable[str]) -> None:
     bulk_insert(session, Warehouse, new)
 
 
+def bulk_update(session: Session, model, rows: list[dict]) -> None:
+    """Update rows by primary key. On PostgreSQL large batches go through COPY + one UPDATE ... FROM."""
+    if not rows:
+        return
+    if session.get_bind().dialect.name != "postgresql" or len(rows) <= 5_000:
+        for i in range(0, len(rows), CHUNK):
+            session.execute(update(model), rows[i : i + CHUNK])
+        return
+    table = model.__table__
+    keys = [c.name for c in table.primary_key.columns]
+    cols = [c for c in rows[0] if c not in keys]
+    tmp = f"tmp_upd_{table.name}"
+    raw = session.connection().connection.driver_connection
+    with raw.cursor() as cur:
+        cur.execute(f"CREATE TEMP TABLE {tmp} ON COMMIT DROP AS SELECT {', '.join(keys + cols)} FROM {table.name} LIMIT 0")
+        with cur.copy(f"COPY {tmp} ({', '.join(keys + cols)}) FROM STDIN") as cp:
+            for r in rows:
+                cp.write_row(tuple(r[c] for c in keys + cols))
+        sets = ", ".join(f"{c} = s.{c}" for c in cols)
+        match = " AND ".join(f"t.{k} = s.{k}" for k in keys)
+        cur.execute(f"UPDATE {table.name} t SET {sets} FROM {tmp} s WHERE {match}")
+        cur.execute(f"DROP TABLE {tmp}")
+
+
+ITEM_FIELDS = {"item_name": "name", "item_group": "item_group", "parent_group": "parent_group", "uom": "uom"}
+
+
 def upsert_items(session: Session, df: pd.DataFrame) -> None:
     """Insert unknown items; fill in name/group/uom/parent group where the new file has them."""
-    fields = [c for c in ("item_name", "item_group", "parent_group", "uom") if c in df.columns]
-    latest = df.drop_duplicates("item_code", keep="last").set_index("item_code")[fields]
-    existing = {
-        r.code: r
-        for r in session.execute(select(Item.code, Item.name, Item.item_group, Item.parent_group, Item.uom))
-    }
-    new, changed = [], []
-    for code, row in latest.iterrows():
-        vals = {
-            "name": row.get("item_name") or None,
-            "item_group": row.get("item_group") or None,
-            "parent_group": row.get("parent_group") or None,
-            "uom": row.get("uom") or None,
-        }
-        cur = existing.get(code)
-        if cur is None:
-            new.append({"code": code, **vals})
-            continue
-        merged = {k: v or getattr(cur, k) for k, v in vals.items()}
-        if any(merged[k] != getattr(cur, k) for k in merged):
-            changed.append({"code": code, **merged})
-    bulk_insert(session, Item, new)
-    for i in range(0, len(changed), CHUNK):
-        session.execute(update(Item), changed[i : i + CHUNK])
+    fields = [c for c in ITEM_FIELDS if c in df.columns]
+    latest = (df.drop_duplicates("item_code", keep="last")[["item_code"] + fields]
+              .rename(columns={"item_code": "code", **ITEM_FIELDS}).replace("", np.nan))
+    cols = list(ITEM_FIELDS.values())
+    for c in cols:
+        if c not in latest.columns:
+            latest[c] = np.nan
+    existing = pd.DataFrame(session.execute(select(Item.code, Item.name, Item.item_group, Item.parent_group, Item.uom)).all(),
+                            columns=["code"] + cols)
+    m = latest.merge(existing, on="code", how="left", suffixes=("", "_old"), indicator=True)
+    is_new = m["_merge"] == "left_only"
+    bulk_insert(session, Item, records(m[is_new], ["code"] + cols))
+    old = m[~is_new]
+    merged = pd.DataFrame({"code": old["code"]})
+    changed = pd.Series(False, index=old.index)
+    for c in cols:
+        merged[c] = old[c].where(old[c].notna(), old[f"{c}_old"])
+        changed |= merged[c].notna() & (merged[c] != old[f"{c}_old"])
+    bulk_update(session, Item, records(merged[changed], ["code"] + cols))
 
 
 # ------------------------------------------------------------------ facts ---
@@ -161,9 +183,7 @@ def load_stock(session: Session, pf: ParsedFile) -> int:
     # Company-wide unit cost per item, weighted by quantity on hand.
     pos = agg[agg["qty"] > 0]
     cost = (pos.groupby("item_code")["value"].sum() / pos.groupby("item_code")["qty"].sum()).dropna()
-    rows = [{"code": c, "unit_cost": float(v)} for c, v in cost.items() if v > 0]
-    for i in range(0, len(rows), CHUNK):
-        session.execute(update(Item), rows[i : i + CHUNK])
+    bulk_update(session, Item, [{"code": c, "unit_cost": float(v)} for c, v in cost.items() if v > 0])
     return len(agg)
 
 
@@ -202,9 +222,8 @@ def refresh_supplier_stats(session: Session) -> None:
         session.execute(update(Supplier), [{"code": c, "lead_time_days": float(v)} for c, v in med.items()])
     last = po.sort_values("po_date").drop_duplicates("item_code", keep="last")
     known = set(session.scalars(select(Item.code)))
-    ups = [{"code": r.item_code, "supplier_code": r.supplier_code} for r in last.itertuples() if r.item_code in known]
-    for i in range(0, len(ups), CHUNK):
-        session.execute(update(Item), ups[i : i + CHUNK])
+    bulk_update(session, Item, [{"code": r.item_code, "supplier_code": r.supplier_code}
+                                for r in last.itertuples() if r.item_code in known])
 
 
 def load_transfers(session: Session, pf: ParsedFile) -> int:

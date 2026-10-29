@@ -85,6 +85,10 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+class AgentNotConfigured(RuntimeError):
+    """No Claude credentials (ANTHROPIC_API_KEY or an `ant auth login` profile) on this server."""
+
+
 @dataclass
 class AgentReply:
     text: str
@@ -96,7 +100,10 @@ class InventoryAgent:
     def __init__(self, session: Session, client: anthropic.Anthropic | None = None, cfg: Settings | None = None):
         self.session = session
         self.cfg = cfg or get_settings()
-        self.client = client or anthropic.Anthropic()
+        try:
+            self.client = client or anthropic.Anthropic()
+        except anthropic.CredentialsError as e:  # a configured profile that can't be loaded
+            raise AgentNotConfigured(str(e)) from e
         self.handlers: dict[str, Callable[[dict[str, Any]], Any]] = {
             "get_summary": lambda a: queries.summary(session),
             "list_warehouses": lambda a: queries.list_warehouses(session),
@@ -161,17 +168,24 @@ class InventoryAgent:
         messages: list[Any] = list(history or []) + [{"role": "user", "content": question}]
         self._drafted = []
         for _ in range(self.cfg.agent_max_turns):
-            resp = self.client.beta.messages.create(
-                model=self.cfg.agent_model,
-                max_tokens=16000,
-                system=SYSTEM_PROMPT,
-                tools=TOOLS,
-                messages=messages,
-                thinking={"type": "adaptive"},
-                output_config={"effort": self.cfg.agent_effort},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",
-            )
+            try:
+                resp = self.client.beta.messages.create(
+                    model=self.cfg.agent_model,
+                    max_tokens=16000,
+                    system=SYSTEM_PROMPT,
+                    tools=TOOLS,
+                    messages=messages,
+                    thinking={"type": "adaptive"},
+                    output_config={"effort": self.cfg.agent_effort},
+                    betas=["server-side-fallback-2026-07-01"],
+                    fallbacks="default",
+                )
+            except anthropic.CredentialsError as e:  # a configured profile that can't be loaded
+                raise AgentNotConfigured(str(e)) from e
+            except TypeError as e:  # the SDK raises this when it finds no credentials at all
+                if "authentication" in str(e):
+                    raise AgentNotConfigured(str(e)) from e
+                raise
             # Keep the full content (including thinking blocks) so later turns can be sent back unchanged.
             messages.append({"role": "assistant", "content": resp.content})
             if resp.stop_reason == "refusal":

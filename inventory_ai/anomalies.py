@@ -39,8 +39,8 @@ def demand_changes(demand: pd.DataFrame, stock: pd.DataFrame, as_of: date, cfg: 
     d = demand.assign(day=pd.to_datetime(demand["day"]).dt.date)
     recent = d[d["day"] >= recent_start].groupby(["item_code", "warehouse"])["qty"].sum().rename("recent")
     base = d[(d["day"] >= base_start) & (d["day"] < recent_start)]
-    agg = base.groupby(["item_code", "warehouse"])["qty"].agg(s="sum", s2=lambda x: float((x ** 2).sum()))
-    week = base.assign(wk=[(x - base_start).days // w for x in base["day"]])
+    agg = base.assign(sq=base["qty"] ** 2).groupby(["item_code", "warehouse"]).agg(s=("qty", "sum"), s2=("sq", "sum"))
+    week = base.assign(wk=(pd.to_datetime(base["day"]) - pd.Timestamp(base_start)).dt.days // w)
     best = week.groupby(["item_code", "warehouse", "wk"])["qty"].sum().groupby(level=[0, 1]).max().rename("best_week")
     df = agg.join(best).join(recent, how="outer").fillna(0.0)
     df["mean"] = df["s"] / base_days

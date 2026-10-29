@@ -202,12 +202,12 @@ MAX_CONVERSATIONS = 200
 
 @app.post("/api/agent")
 def ask_agent(body: Question, s: Session = Depends(db.get_session)) -> dict[str, Any]:
-    from .agent import InventoryAgent
+    from .agent import AgentNotConfigured, InventoryAgent
 
     cid = body.conversation_id if body.conversation_id in _conversations else uuid.uuid4().hex
     try:
         reply = InventoryAgent(s).ask(body.question, _conversations.get(cid))
-    except anthropic.AuthenticationError:
+    except (AgentNotConfigured, anthropic.AuthenticationError):
         raise HTTPException(503, "The AI assistant is not configured: set ANTHROPIC_API_KEY on the server.")
     except anthropic.RateLimitError:
         raise HTTPException(429, "The AI assistant is busy. Try again in a minute.")
