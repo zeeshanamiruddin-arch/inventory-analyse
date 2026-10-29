@@ -60,13 +60,22 @@ def make(args) -> dict[str, Path]:
     rate[dead] = 0
     branch_factor = rng.uniform(0.3, 1.6, len(branches))
     wh_names = branches + [cpd]
-    wh_factor = np.append(branch_factor, 0.4)  # CPD also sells to trade customers
+    # Each branch carries its own range (~2,500 parts, mostly the popular ones) and sells other parts only as
+    # rare special orders; CPD carries the whole catalogue and sells to trade customers.
+    pick = np.sqrt(rate + 1e-9)
+    in_range = np.zeros((len(wh_names), n), dtype=bool)
+    for w in range(len(branches)):
+        in_range[w, rng.choice(n, min(n, args.branch_range), replace=False, p=pick / pick.sum())] = True
+    in_range[-1] = True
+    in_range[:, 0] = True  # the spike item is stocked everywhere
+    wh_rate = np.where(in_range, 4.0, 0.03) * rate * np.append(branch_factor, 1.0)[:, None]
+    wh_rate[-1] = rate * 3.0
 
     # ---- sales lines -------------------------------------------------------
     rows = []
     spike_item, spike_wh = 0, 0  # fastest item gets a spike in the last 7 days at the first branch
     for w, wname in enumerate(wh_names):
-        lam = np.outer(rate * wh_factor[w], np.ones(len(days)))
+        lam = np.outer(wh_rate[w], np.ones(len(days)))
         events = rng.poisson(lam)
         if w == spike_wh:
             events[spike_item, -7:] += 6
@@ -114,12 +123,14 @@ def make(args) -> dict[str, Path]:
     # ---- stock today and a week ago ---------------------------------------
     stock_rows = []
     for w, wname in enumerate(wh_names):
-        daily = rate * wh_factor[w]
+        daily = wh_rate[w]
         cover = rng.uniform(0, 80, n) if wname != cpd else rng.uniform(30, 160, n)
         qty = np.floor(daily * cover + rng.poisson(0.3, n))
-        held = rng.random(n) < (0.35 if wname != cpd else 0.9)
-        qty = np.where(held | (daily > 0.05), qty, 0)
-        qty[np.isin(np.arange(n), dead) & (rng.random(n) < 0.5)] += rng.integers(2, 30)
+        held = in_range[w] & (rng.random(n) < 0.9) if wname != cpd else rng.random(n) < 0.9
+        stray = (wname != cpd) & ~in_range[w] & (rng.random(n) < 0.01)  # old stock outside the branch's range
+        qty = np.where(held, qty, 0) + np.where(stray, rng.integers(1, 6, n), 0)
+        parked = np.isin(np.arange(n), dead) & (rng.random(n) < (0.5 if wname == cpd else 0.02))
+        qty[parked] += np.ceil(1500 / cost[parked])  # dead stock worth ~1,500 SAR per line
         stock_rows.append(pd.DataFrame({"i": np.arange(n), "wh": wname, "qty": qty}))
     for extra in ("Slow Moving - SP", "Hidden - SP"):
         idx = rng.choice(n, n // 20, replace=False)
@@ -226,6 +237,7 @@ def main() -> None:
     ap.add_argument("--end", help="last sales date, YYYY-MM-DD (default: yesterday)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--demand-scale", type=float, default=1.0, help="multiply every item's sales rate")
+    ap.add_argument("--branch-range", type=int, default=2500, help="parts each branch carries")
     ap.add_argument("--csv", action="store_true", help="write CSV instead of xlsx (needed above ~1M rows)")
     ap.add_argument("--out", default="sample_data")
     make(ap.parse_args())

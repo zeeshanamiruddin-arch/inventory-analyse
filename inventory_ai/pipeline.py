@@ -42,8 +42,9 @@ def _df(session: Session, stmt, columns: list[str]) -> pd.DataFrame:
 
 def load_inputs(session: Session, forecasts: pd.DataFrame | None = None) -> Inputs:
     if forecasts is None:
-        forecasts = _df(session, select(Forecast.item_code, Forecast.warehouse, Forecast.daily_mean, Forecast.daily_std, Forecast.abc),
-                        ["item_code", "warehouse", "daily_mean", "daily_std", "abc"])
+        forecasts = _df(session, select(Forecast.item_code, Forecast.warehouse, Forecast.daily_mean, Forecast.daily_std,
+                                        Forecast.abc, Forecast.in_range),
+                        ["item_code", "warehouse", "daily_mean", "daily_std", "abc", "in_range"])
     return Inputs(
         forecasts=forecasts,
         stock=_df(session, select(StockLevel.item_code, StockLevel.warehouse, StockLevel.qty, StockLevel.reserved, StockLevel.valuation_rate),
@@ -67,6 +68,7 @@ def run_forecasts(session: Session, as_of: date, cfg: Settings) -> tuple[pd.Data
 
     stock = _df(session, select(StockLevel.item_code, StockLevel.warehouse, StockLevel.qty), ["item_code", "warehouse", "qty"])
     sellable = list(session.scalars(select(Warehouse.name).where(Warehouse.sellable.is_(True)).order_by(Warehouse.name)))
+    category = dict(session.execute(select(Warehouse.name, Warehouse.category)).all())
     frames, last_sales, alerts = [], [], []
     for wh in sellable:
         demand = _df(session, select(DailyDemand.item_code, DailyDemand.day, DailyDemand.qty)
@@ -79,10 +81,13 @@ def run_forecasts(session: Session, as_of: date, cfg: Settings) -> tuple[pd.Data
         if len(fc):
             fc["warehouse"] = wh
             fc["abc"] = fc["item_code"].map(abc).fillna("C")
+            # Central keeps everything it sells; a branch only its regular sellers.
+            fc["in_range"] = True if category.get(wh) != "Branch" else fc["sale_days"] >= cfg.branch_range_min_sale_days
             fc = fc.merge(last[["item_code", "last_sale"]], on="item_code", how="left")
             frames.append(fc)
         alerts.append(anomalies.demand_changes(demand.assign(warehouse=wh), stock[stock["warehouse"] == wh], as_of, cfg))
-    cols = ["item_code", "warehouse", "daily_mean", "daily_std", "method", "pattern", "abc", "xyz", "last_sale"]
+    cols = ["item_code", "warehouse", "daily_mean", "daily_std", "method", "pattern", "abc", "xyz", "last_sale",
+            "sale_days", "in_range"]
     forecasts = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=cols)
     forecasts["run_date"] = as_of
     session.execute(delete(Forecast))
@@ -167,14 +172,17 @@ def run_nightly(session: Session, as_of: date | None = None, cfg: Settings | Non
     as_of = as_of or latest_sales_date(session) or date.today()
     forecasts, last_sale, demand_alerts = run_forecasts(session, as_of, cfg)
     log.info("forecasts: %d series in %.1fs", len(forecasts), time.time() - t0)
-    inp = load_inputs(session, forecasts[["item_code", "warehouse", "daily_mean", "daily_std", "abc"]])
+    inp = load_inputs(session, forecasts[["item_code", "warehouse", "daily_mean", "daily_std", "abc", "in_range"]])
     transfers, purchases = plan(inp, cfg)
     flag_spikes(transfers, purchases, demand_alerts)
     n_t, n_p = save_recommendations(session, transfers, purchases, as_of)
     alerts = run_alerts(session, as_of, inp, forecasts, last_sale, demand_alerts, cfg)
+    ranged = forecasts[forecasts["in_range"].astype(bool) & forecasts["warehouse"].map(
+        dict(zip(inp.warehouses["name"], inp.warehouses["category"]))).eq("Branch")]
     return {
         "as_of": as_of.isoformat(),
         "series_forecast": int(len(forecasts)),
+        "avg_branch_range": int(round(ranged.groupby("warehouse").size().mean())) if len(ranged) else 0,
         "transfer_suggestions": n_t,
         "purchase_suggestions": n_p,
         "purchase_value": round(float(purchases["value"].sum()) if len(purchases) else 0.0, 2),

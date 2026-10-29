@@ -22,6 +22,7 @@ ERP exports (.xlsx/.csv) ──► import ──► PostgreSQL ──► nightly
 |---|---|
 | **Import** | Recognises the four ERP exports by their header row: *Spare Part Item Sales Detailed*, *Stock Balance*, *Item-Wise Purchase History*, *Stock Entry*. Skips total rows, fills a missing warehouse from the POS profile, converts USD prices, ignores draft/cancelled stock entries, and reports every skipped row. Re-importing a year-to-date file replaces that date range, never duplicates. |
 | **Forecast** | Per item and warehouse, from the last 182 days. Classifies each series (smooth / erratic / intermittent / lumpy). Steady sellers use exponential smoothing; slow and sporadic parts (most spare parts) use **TSB**, which also fades the forecast when a part stops selling. Runs as one matrix per warehouse, so 4M series take minutes, not hours. |
+| **Branch range** | Each branch stocks only its own range (on average ~2,500 of the 200k parts): items it sold on at least 3 days in the last 6 months (`BRANCH_RANGE_MIN_SALE_DAYS`). Out-of-range parts are served from CPD when ordered; branch stock of them is offered to branches that sell them. CPD carries the full catalogue. |
 | **ABC / XYZ** | A = items making the first 80% of sales value, B = next 15%, C = the rest. Sets the service level: 98% / 95% / 90%. |
 | **Transfers first** | A branch below its reorder point is topped up from CPD surplus, then from branches holding more than 60 days of their own demand or stock they don't sell. |
 | **Purchases** | Company level per item: stock + in transit + open POs vs reorder point for the supplier's **learned** lead time (median PO date → last receipt). Orders up to 30 days beyond that. New items get the brand's usual supplier, marked as a guess. |
@@ -74,15 +75,19 @@ Importing a stock balance every day also lets the loss check compare consecutive
 
 ## Scale
 
-Measured on 4 CPU cores with PostgreSQL 16, synthetic data at 200,000 SKUs × 20 branches + CPD:
+Measured on 4 CPU cores with PostgreSQL 16, synthetic data shaped like the business: 200,000 parts, CPD
+carrying the full catalogue, 20 branches each carrying their own range (~2,500 parts):
 
 | Step | Rows | Time |
 |---|---|---|
-| Import sales (6.5 months) | 1.38M lines | 66 s |
-| Import stock balance | 481k lines | 21 s |
-| Import purchases + transfers | 68k + 50k | 7 s |
-| Nightly run: forecasts | 700k item×warehouse series | 71 s |
-| Nightly run: total (forecasts, suggestions, alerts) | | 6.3 min |
+| Import sales (6.5 months) | 468k lines | 18 s |
+| Import stock balance | 142k lines | 7 s |
+| Import purchases + transfers | 68k + 50k | 6 s |
+| Nightly run: forecasts | 137k item×warehouse series | 17 s |
+| Nightly run: total (forecasts, suggestions, alerts) | | 41 s |
+
+A stress test with every branch selling the whole catalogue (1.38M sales lines, 700k series) imported in
+2.4 min and ran nightly in 6.3 min.
 
 Forecasting works one warehouse at a time, so memory stays flat; PostgreSQL loads use `COPY`.
 Excel stops at 1,048,576 rows per sheet, so very large exports should be CSV.

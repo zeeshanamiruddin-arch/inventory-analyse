@@ -162,7 +162,7 @@ async function loadOverview() {
   const nAlerts = Object.values(a).reduce((x, y) => x + y.count, 0);
   $("#kpis").replaceChildren(
     card("Sellable stock value", fmt(s.stock_value_sellable), "SAR"),
-    card("Items", fmt(s.items), `${s.warehouses} selling warehouses`),
+    card("Items", fmt(s.items), `${s.warehouses} selling warehouses · ~${fmt(s.avg_branch_range)} per branch range`),
     card("Purchases to approve", fmt(p.purchase?.count), fmt(p.purchase?.value) + " SAR"),
     card("Transfers to approve", fmt(p.transfer?.count), fmt(p.transfer?.value) + " SAR"),
     card("Branch lines out of stock", fmt(s.branch_lines_out_of_stock), "items that sell, 0 on hand"),
@@ -241,7 +241,7 @@ async function showItem(code) {
   $("#iDetail").replaceChildren(
     el("h2", {}, `${d.item.code} · ${d.item.name || ""}`),
     el("p", {class: "muted"}, `${d.item.group || ""} · ${d.item.brand || ""} · unit cost ${fmt(d.item.unit_cost, 2)} SAR · supplier ${d.item.supplier || "—"} · company on hand ${fmt(d.company.on_hand)} · demand ${fmt(d.company.daily_demand, 2)}/day · on order ${fmt(d.company.on_order)}`),
-    el("div", {class: "tw"}, table([{h: "Warehouse", k: "warehouse"}, {h: "Type", k: "category"}, {h: "On hand", n: 1, f: r => fmt(r.qty)}, {h: "In transit", n: 1, f: r => fmt(r.inbound)},
+    el("div", {class: "tw"}, table([{h: "Warehouse", k: "warehouse"}, {h: "Type", k: "category"}, {h: "In range", f: r => r.in_range ? "yes" : "no"}, {h: "On hand", n: 1, f: r => fmt(r.qty)}, {h: "In transit", n: 1, f: r => fmt(r.inbound)},
       {h: "Per day", n: 1, f: r => fmt(r.daily_mean, 2)}, {h: "Pattern", f: r => r.pattern || "—"}, {h: "Reorder pt", n: 1, f: r => fmt(r.reorder_point, 1)},
       {h: "Order up to", n: 1, f: r => fmt(r.order_up_to, 0)}, {h: "Days cover", n: 1, f: r => fmt(r.days_of_cover, 0)}, {h: "Last sale", f: r => r.last_sale || "—"}], d.warehouses)),
     d.pending_suggestions.length ? el("p", {}, `${d.pending_suggestions.length} pending suggestion(s) for this item, see Approvals.`) : "",

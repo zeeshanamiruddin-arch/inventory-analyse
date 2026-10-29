@@ -32,6 +32,7 @@ How the numbers are made:
 use the TSB method; steady sellers use exponential smoothing.
 - Reorder point = forecast x (lead time + review period) + safety stock. Safety stock depends on the item's ABC class \
 (A = top 80% of sales value gets the highest service level).
+- Each branch stocks only its own range (about 2,500 parts it sells regularly: on at least a few days in the last 6 months). Parts outside a branch's range are supplied from CPD when ordered, and branch stock of them is surplus.
 - Transfers are suggested before purchases: stock is moved from CPD or from branches holding far more than they sell.
 
 Approval rule: you can draft a purchase or transfer, which creates a *pending* suggestion. You cannot approve, \

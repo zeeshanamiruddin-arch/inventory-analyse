@@ -50,3 +50,9 @@ def test_forecast_warehouse_uses_tsb_for_slow_movers():
     assert fc.loc["FAST", "method"] == "SES" and fc.loc["FAST", "daily_mean"] == pytest.approx(4.0)
     assert fc.loc["SLOW", "method"] == "TSB" and fc.loc["SLOW", "daily_mean"] == pytest.approx(0.2, rel=0.3)
     assert fc.loc["SLOW", "daily_std"] >= np.sqrt(fc.loc["SLOW", "daily_mean"]) - 1e-9
+
+
+def test_sale_days_counts_days_with_sales():
+    rows = [{"item_code": "A", "day": date(2026, 4, d), "qty": 1.0} for d in (1, 5, 9)]
+    fc = forecast_warehouse(pd.DataFrame(rows), date(2026, 4, 30), 60)
+    assert fc.loc[0, "sale_days"] == 3

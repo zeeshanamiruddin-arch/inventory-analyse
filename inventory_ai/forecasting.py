@@ -138,10 +138,10 @@ def abc_classes(value_by_item: pd.Series) -> pd.Series:
 
 
 def forecast_warehouse(demand: pd.DataFrame, end: date, history_days: int) -> pd.DataFrame:
-    """Forecast one warehouse. Returns item_code, daily_mean, daily_std, method, pattern, xyz."""
+    """Forecast one warehouse. Returns item_code, daily_mean, daily_std, method, pattern, xyz, sale_days."""
     sm = build_matrix(demand, end, history_days)
     if len(sm.items) == 0:
-        return pd.DataFrame(columns=["item_code", "daily_mean", "daily_std", "method", "pattern", "xyz"])
+        return pd.DataFrame(columns=["item_code", "daily_mean", "daily_std", "method", "pattern", "xyz", "sale_days"])
     pattern, _, _ = classify_pattern(sm.y)
     ses_mean, ses_rmse = ses(sm.y)
     tsb_mean, tsb_rmse = tsb(sm.y)
@@ -157,5 +157,6 @@ def forecast_warehouse(demand: pd.DataFrame, end: date, history_days: int) -> pd
             "method": np.where(use_tsb, "TSB", "SES"),
             "pattern": pattern,
             "xyz": xyz_class(sm.y),
+            "sale_days": (sm.y > 0).sum(axis=1),
         }
     )

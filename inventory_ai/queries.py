@@ -7,6 +7,7 @@ import math
 from datetime import date
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.orm import Session
@@ -66,7 +67,9 @@ def summary(session: Session) -> dict[str, Any]:
         select(func.count()).select_from(Forecast)
         .join(Warehouse, Warehouse.name == Forecast.warehouse)
         .outerjoin(StockLevel, (StockLevel.item_code == Forecast.item_code) & (StockLevel.warehouse == Forecast.warehouse))
-        .where(Warehouse.category == BRANCH, Forecast.daily_mean >= 0.05, func.coalesce(StockLevel.qty, 0) <= 0))
+        .where(Warehouse.category == BRANCH, Forecast.in_range.is_(True), func.coalesce(StockLevel.qty, 0) <= 0))
+    branch_range = (select(func.count().label("n")).select_from(Forecast).join(Warehouse, Warehouse.name == Forecast.warehouse)
+                    .where(Warehouse.category == BRANCH, Forecast.in_range.is_(True)).group_by(Forecast.warehouse).subquery())
     imports = session.execute(select(ImportLog.kind, func.max(ImportLog.date_to), func.max(ImportLog.imported_at))
                               .group_by(ImportLog.kind)).all()
     return clean([{
@@ -74,6 +77,7 @@ def summary(session: Session) -> dict[str, Any]:
         "items": session.scalar(select(func.count()).select_from(Item)),
         "warehouses": session.scalar(select(func.count()).select_from(Warehouse).where(Warehouse.sellable.is_(True))),
         "forecast_run": session.scalar(select(func.max(Forecast.run_date))),
+        "avg_branch_range": session.scalar(select(func.avg(branch_range.c.n))),
         "branch_lines_out_of_stock": out_of_stock,
         "pending": {k: {"count": n, "value": float(v)} for k, n, v in pending},
         "alerts": {k: {"count": n, "value": float(v)} for k, n, v in alerts},
@@ -96,8 +100,8 @@ def item_status(session: Session, code: str, cfg: Settings | None = None) -> dic
     stock = pd.DataFrame(_rows(session, select(StockLevel.warehouse, StockLevel.qty, StockLevel.reserved, StockLevel.value)
                                .where(StockLevel.item_code == code)), columns=["warehouse", "qty", "reserved", "value"])
     fc = pd.DataFrame(_rows(session, select(Forecast.warehouse, Forecast.daily_mean, Forecast.daily_std, Forecast.pattern,
-                                            Forecast.abc, Forecast.last_sale).where(Forecast.item_code == code)),
-                      columns=["warehouse", "daily_mean", "daily_std", "pattern", "abc", "last_sale"])
+                                            Forecast.abc, Forecast.last_sale, Forecast.in_range).where(Forecast.item_code == code)),
+                      columns=["warehouse", "daily_mean", "daily_std", "pattern", "abc", "last_sale", "in_range"])
     transit = pd.DataFrame(_rows(session, select(StockTransfer.destination.label("warehouse"), func.sum(StockTransfer.qty).label("inbound"))
                                  .where(StockTransfer.item_code == code, StockTransfer.in_transit.is_(True)).group_by(StockTransfer.destination)),
                            columns=["warehouse", "inbound"])
@@ -106,11 +110,13 @@ def item_status(session: Session, code: str, cfg: Settings | None = None) -> dic
     for c in ("qty", "reserved", "value", "daily_mean", "daily_std", "inbound"):
         df[c] = df[c].fillna(0.0)
     df["category"] = df["warehouse"].map(cats)
+    df["in_range"] = df["in_range"].astype("boolean").fillna(False).astype(bool) | (df["category"] == CENTRAL)
     df["abc"] = df["abc"].fillna(fc["abc"].iloc[0] if len(fc) else "C")
     z = df["abc"].map(lambda a: z_value(cfg.service_level(a)))
     _, rop, out = policy(df["daily_mean"].to_numpy(), df["daily_std"].to_numpy(), z.to_numpy(),
                          float(cfg.transfer_lead_days), cfg.review_period_days, cfg.order_cycle_days)
-    df["reorder_point"], df["order_up_to"] = rop, out
+    df["reorder_point"] = np.where(df["in_range"], rop, 0.0)
+    df["order_up_to"] = np.where(df["in_range"], out, 0.0)
     df["position"] = (df["qty"] - df["reserved"]).clip(lower=0) + df["inbound"]
     df["days_of_cover"] = [p / m if m > 0 else None for p, m in zip(df["position"], df["daily_mean"])]
     df = df.sort_values(["category", "warehouse"])
@@ -128,7 +134,7 @@ def item_status(session: Session, code: str, cfg: Settings | None = None) -> dic
         "company": clean([{"on_hand": float(df.loc[df["category"].isin([CENTRAL, BRANCH]), "qty"].sum()),
                            "daily_demand": float(df["daily_mean"].sum()),
                            "on_order": float(sum(p["remaining_qty"] for p in open_po))}])[0],
-        "warehouses": clean(df[["warehouse", "category", "qty", "reserved", "inbound", "daily_mean", "pattern", "abc",
+        "warehouses": clean(df[["warehouse", "category", "in_range", "qty", "reserved", "inbound", "daily_mean", "pattern", "abc",
                                 "last_sale", "reorder_point", "order_up_to", "position", "days_of_cover"]].to_dict("records")),
         "open_purchase_orders": clean(open_po),
         "pending_suggestions": clean(recs),
@@ -191,7 +197,7 @@ def stockout_risk(session: Session, warehouse: str | None = None, within_days: f
          .join(Item, Item.code == Forecast.item_code)
          .outerjoin(StockLevel, (StockLevel.item_code == Forecast.item_code) & (StockLevel.warehouse == Forecast.warehouse))
          .outerjoin(inbound, (inbound.c.item_code == Forecast.item_code) & (inbound.c.destination == Forecast.warehouse))
-         .where(Forecast.daily_mean >= 0.05, position < Forecast.daily_mean * within_days))
+         .where(Forecast.in_range.is_(True), Forecast.daily_mean >= 0.05, position < Forecast.daily_mean * within_days))
     if warehouse:
         q = q.where(Forecast.warehouse == warehouse)
     q = q.order_by(Forecast.abc, (Forecast.daily_mean * within_days - position).desc()).limit(limit)
@@ -205,6 +211,7 @@ def warehouse_summary(session: Session, warehouse: str) -> dict[str, Any] | None
     stock = session.execute(select(func.count(), func.coalesce(func.sum(StockLevel.value), 0))
                             .where(StockLevel.warehouse == warehouse, StockLevel.qty > 0)).one()
     sales_rate = session.scalar(select(func.coalesce(func.sum(Forecast.daily_mean), 0)).where(Forecast.warehouse == warehouse))
+    range_size = session.scalar(select(func.count()).select_from(Forecast).where(Forecast.warehouse == warehouse, Forecast.in_range.is_(True)))
     pend_in = session.execute(select(func.count(), func.coalesce(func.sum(Recommendation.value), 0))
                               .where(Recommendation.status == "pending", Recommendation.to_warehouse == warehouse)).one()
     pend_out = session.execute(select(func.count(), func.coalesce(func.sum(Recommendation.value), 0))
@@ -213,7 +220,7 @@ def warehouse_summary(session: Session, warehouse: str) -> dict[str, Any] | None
                                   .group_by(Alert.kind)).all())
     return clean([{
         "warehouse": wh.name, "label": wh.label, "category": wh.category, "lines_in_stock": stock[0],
-        "stock_value": float(stock[1]), "forecast_units_per_day": float(sales_rate or 0),
+        "stock_value": float(stock[1]), "forecast_units_per_day": float(sales_rate or 0), "items_in_range": range_size,
         "pending_transfers_in": {"count": pend_in[0], "value": float(pend_in[1])},
         "pending_transfers_out": {"count": pend_out[0], "value": float(pend_out[1])},
         "alerts": alerts,

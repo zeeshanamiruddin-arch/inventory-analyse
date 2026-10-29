@@ -49,7 +49,7 @@ def policy(mean: np.ndarray, std: np.ndarray, z: np.ndarray, lead: np.ndarray, r
 
 @dataclass
 class Inputs:
-    forecasts: pd.DataFrame  # item_code, warehouse, daily_mean, daily_std, abc
+    forecasts: pd.DataFrame  # item_code, warehouse, daily_mean, daily_std, abc[, in_range]
     stock: pd.DataFrame  # item_code, warehouse, qty, reserved, valuation_rate
     in_transit: pd.DataFrame  # item_code, destination, qty
     open_po: pd.DataFrame  # item_code, remaining_qty
@@ -63,8 +63,10 @@ def _grid(inp: Inputs) -> pd.DataFrame:
     sell = set(wh[wh.isin([CENTRAL, BRANCH])].index)
     fc = inp.forecasts[inp.forecasts["warehouse"].isin(sell)]
     st = inp.stock[inp.stock["warehouse"].isin(sell)]
+    if "in_range" not in fc.columns:
+        fc = fc.assign(in_range=True)
     g = pd.merge(
-        fc[["item_code", "warehouse", "daily_mean", "daily_std", "abc"]],
+        fc[["item_code", "warehouse", "daily_mean", "daily_std", "abc", "in_range"]],
         st[["item_code", "warehouse", "qty", "reserved", "valuation_rate"]],
         on=["item_code", "warehouse"], how="outer",
     )
@@ -77,6 +79,8 @@ def _grid(inp: Inputs) -> pd.DataFrame:
     abc = inp.forecasts.groupby("item_code")["abc"].first()
     g["abc"] = g["abc"].fillna(g["item_code"].map(abc)).fillna("C")
     g["available"] = (g["qty"] - g["reserved"]).clip(lower=0)
+    # Stock with no forecast (no sales here) is not part of this warehouse's range, except at central.
+    g["in_range"] = g["in_range"].astype("boolean").fillna(False).astype(bool) | (g["category"] == CENTRAL)
     return g
 
 
@@ -94,11 +98,13 @@ def plan_transfers(g: pd.DataFrame, cfg: Settings, unit_cost: pd.Series) -> pd.D
     g = g.assign(rop=rop, order_up_to=out, position=g["available"] + g["inbound"])
 
     branch = g["category"] == BRANCH
-    need = np.where(branch & (g["position"] < g["rop"]) & (g["daily_mean"] > 0), np.ceil(g["order_up_to"] - g["position"]), 0)
+    need = np.where(branch & g["in_range"] & (g["position"] < g["rop"]) & (g["daily_mean"] > 0),
+                    np.ceil(g["order_up_to"] - g["position"]), 0)
     keep = np.where(
         g["category"] == CENTRAL,
         g["daily_mean"] * cfg.order_cycle_days + g["rop"],
-        np.maximum(g["daily_mean"] * cfg.donor_keep_days, g["order_up_to"]),
+        # A branch keeps what it needs of its range; anything outside its range can go.
+        np.where(g["in_range"], np.maximum(g["daily_mean"] * cfg.donor_keep_days, g["order_up_to"]), 0),
     )
     surplus = np.floor(np.maximum(g["available"] - keep, 0))
     g = g.assign(need=need, surplus=surplus)
@@ -115,7 +121,7 @@ def plan_transfers(g: pd.DataFrame, cfg: Settings, unit_cost: pd.Series) -> pd.D
     moves = []
     give_by_item = {k: v for k, v in givers.groupby("item_code", sort=False)}
     for item, tk in takers.groupby("item_code", sort=False):
-        donors = [[r.warehouse, r.surplus, r.daily_mean, r.category] for r in give_by_item[item].itertuples()]
+        donors = [[r.warehouse, r.surplus, r.daily_mean, r.category, not r.in_range] for r in give_by_item[item].itertuples()]
         cost = float(unit_cost.get(item, 0.0) or 0.0)
         for t in tk.itertuples():
             left = t.need
@@ -128,7 +134,7 @@ def plan_transfers(g: pd.DataFrame, cfg: Settings, unit_cost: pd.Series) -> pd.D
                 d[1] -= q
                 left -= q
                 src_note = "central store surplus" if d[3] == CENTRAL else (
-                    "no sales there" if d[2] == 0 else f"{d[2]:.2f}/day there, above {cfg.donor_keep_days} days of cover")
+                    "not in that branch's range" if d[4] else f"{d[2]:.2f}/day there, above {cfg.donor_keep_days} days of cover")
                 moves.append({
                     "item_code": item, "from_warehouse": d[0], "to_warehouse": t.warehouse, "qty": float(q),
                     "value": round(q * cost, 2),

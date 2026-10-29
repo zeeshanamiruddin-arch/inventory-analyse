@@ -73,3 +73,29 @@ def test_new_item_gets_brand_supplier_marked_as_guess():
                         ["OTHER", 5.0, "S9", "Kia"]])
     p = plan(inp, cfg)[1]
     assert p.iloc[0]["supplier_code"] == "S1" and "guessed" in p.iloc[0]["reason"]
+
+
+def test_branch_is_only_topped_up_for_its_range():
+    cfg = Settings(min_transfer_value=0)
+    inp = inputs(
+        fc=[["X", "P01 - A - SP", 0.5, 0.5, "A"], ["X", "CPD - SP", 1.0, 1.0, "A"]],
+        stock=[["X", "P01 - A - SP", 0, 0, 10], ["X", "CPD - SP", 500, 0, 10]],
+    )
+    inp.forecasts["in_range"] = [False, True]  # P01 sold it as a one-off special order
+    transfers, purchases = plan(inp, cfg)
+    assert transfers.empty
+    # ...but that demand still counts when deciding what the company must buy.
+    inp.stock.loc[inp.stock["warehouse"] == "CPD - SP", "qty"] = 0
+    assert plan(inp, cfg)[1].iloc[0]["qty"] > 0
+
+
+def test_stock_outside_a_branch_range_is_offered_to_others():
+    cfg = Settings(min_transfer_value=0)
+    inp = inputs(
+        fc=[["X", "P01 - A - SP", 1.0, 0.5, "B"], ["X", "P02 - B - SP", 0.05, 0.2, "B"]],
+        stock=[["X", "P01 - A - SP", 0, 0, 10], ["X", "P02 - B - SP", 8, 0, 10]],
+    )
+    inp.forecasts["in_range"] = [True, False]
+    transfers, _ = plan(inp, cfg)
+    t = transfers.iloc[0]
+    assert (t.from_warehouse, t.qty) == ("P02 - B - SP", 8) and "range" in t.reason

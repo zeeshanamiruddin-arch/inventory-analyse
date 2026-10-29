@@ -152,6 +152,8 @@ class Forecast(Base):
     abc: Mapped[str] = mapped_column(String(1))
     xyz: Mapped[str] = mapped_column(String(1))
     last_sale: Mapped[date | None] = mapped_column(Date)
+    sale_days: Mapped[int] = mapped_column(Integer, default=0)  # days with a sale in the history window
+    in_range: Mapped[bool] = mapped_column(Boolean, default=True, index=True)  # stocked at this warehouse
 
 
 class Recommendation(Base):

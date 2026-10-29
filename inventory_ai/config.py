@@ -32,6 +32,9 @@ class Settings:
     default_supplier_lead_days: int = field(default_factory=lambda: _i("DEFAULT_SUPPLIER_LEAD_DAYS", 45))
     # A donor warehouse keeps at least this many days of its own demand.
     donor_keep_days: int = field(default_factory=lambda: _i("DONOR_KEEP_DAYS", 60))
+    # A branch stocks an item (it is "in range") once it sold it on at least this many days in the history window.
+    # Items outside the range are supplied from CPD when ordered; branch stock of them is surplus.
+    branch_range_min_sale_days: int = field(default_factory=lambda: _i("BRANCH_RANGE_MIN_SALE_DAYS", 3))
     min_transfer_value: float = field(default_factory=lambda: _f("MIN_TRANSFER_VALUE", 100.0))
 
     # Anomaly thresholds.

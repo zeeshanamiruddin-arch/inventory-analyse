@@ -17,7 +17,7 @@ from inventory_ai.models import Recommendation
 @pytest.fixture(scope="module")
 def sample(tmp_path_factory):
     out = tmp_path_factory.mktemp("sample")
-    files = generate_sample_data.make(Namespace(skus=300, branches=4, days=150, end="2026-10-28", seed=3, csv=True, demand_scale=1.0, out=str(out)))
+    files = generate_sample_data.make(Namespace(skus=300, branches=4, days=150, end="2026-10-28", seed=3, csv=True, demand_scale=1.0, branch_range=80, out=str(out)))
     return list(files.values())
 
 
