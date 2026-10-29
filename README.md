@@ -74,9 +74,18 @@ Importing a stock balance every day also lets the loss check compare consecutive
 
 ## Scale
 
-Measured on 4 CPU cores with PostgreSQL 16, synthetic data at 200,000 SKUs × 20 branches + CPD (see the
-commit message / PR for exact timings). Forecasting works one warehouse at a time, so memory stays flat;
-PostgreSQL loads use `COPY`. Excel stops at 1,048,576 rows per sheet, so very large exports should be CSV.
+Measured on 4 CPU cores with PostgreSQL 16, synthetic data at 200,000 SKUs × 20 branches + CPD:
+
+| Step | Rows | Time |
+|---|---|---|
+| Import sales (6.5 months) | 1.38M lines | 66 s |
+| Import stock balance | 481k lines | 21 s |
+| Import purchases + transfers | 68k + 50k | 7 s |
+| Nightly run: forecasts | 700k item×warehouse series | 71 s |
+| Nightly run: total (forecasts, suggestions, alerts) | | 6.3 min |
+
+Forecasting works one warehouse at a time, so memory stays flat; PostgreSQL loads use `COPY`.
+Excel stops at 1,048,576 rows per sheet, so very large exports should be CSV.
 
 ## API
 
